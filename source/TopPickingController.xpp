@@ -1,0 +1,104 @@
+public class TopPicking extends RunBaseBatch
+{
+    public void new()
+    {
+        super();
+    }
+
+    public void run()
+    {
+        SalesTable          salesTable;
+        SalesFormLetter     salesFormLetter;
+        TopPickProcessTable processTable;
+        Map                 salesMap;
+
+        processTable.readPast(true);
+
+        do
+        {
+            ttsBegin;
+            
+            select pessimisticlock firstOnly * from processTable
+                where processTable.ProcessedStatus == NoYes::No;
+                
+            select * from salesTable
+                where salesTable.SalesId        == processTable.SalesId
+                    && salesTable.DocumentStatus == DocumentStatus::None;
+
+            if (salesTable)
+            {
+                salesFormLetter = SalesFormLetter::construct(DocumentStatus::Invoice);
+                salesFormLetter.getLast();
+                salesFormLetter.resetParmListCommonCS();
+                salesFormLetter.allowEmptyTable(salesFormLetter.initAllowEmptyTable(true));
+
+                salesMap = new Map(Types::Int64, Types::Record);
+                salesMap.insert(salesTable.RecId, salesTable);
+
+                salesFormLetter.parmDataSourceRecordsPacked(salesMap.pack());
+                salesFormLetter.createParmUpdateFromParmUpdateRecord(SalesFormLetterParmData::initSalesParmUpdateFormLetter(DocumentStatus::Invoice, salesFormLetter.pack()));
+                salesFormLetter.showQuery(false);
+                salesFormLetter.initLinesQuery();
+                salesFormLetter.upate(salesTable, systemDateGet(), SalesUpdate::All, AccountOrder::None, false, false);
+            }
+
+            if (processTable)
+            {
+                processTable.ProcessedStatus = NoYes::Yes;
+                processTable.update();
+            }    
+
+            ttsCommit;
+
+        } while(processTable);                                     
+    }
+
+    public static TopPicking construct()
+    {
+        return new TopPicking();
+    } 
+}
+
+static void ScheduleTopPicking(Args _args)
+{
+    BatchHeader         batchHeader;
+    TopPicking          topPicking;
+    TopPickProcessTable processTable;
+    SalesTable          salesTable;
+    int                 totalNumberOfTasksNeeded = 10;
+    int                 counter;
+
+    ttsBegin;
+
+    select count(RecId) from salesTable
+        where salesTable.SalesId >= 'SO-004000001'
+           && salesTable.SalesId <= 'SO-005000000'
+           && salesTable.DocumentStatus == DocumentStatus::None;
+    
+    if (salesTable.RecId > 0)
+    {
+        insert_recordset processTable(SalesId)
+            select SalesId from salesTable
+                where salesTable.SalesId >= 'SO-004000001'
+                   && salesTable.SalesId <= 'SO-005000000'
+                   && salesTable.DocumentStatus == DocumentStatus::None;
+        
+        update_recordSet processTable
+            setting ProcessedStatus = NoYes::No;
+
+        batchHeader = BatchHeader::construct();
+        batchHeader.parmCapton(strFmt('Batch job for TopPicking - Invoice sales order %1 thru %2', 'SO-004000001', 'SO-00500000'));
+
+        for (counter = 1; counter < totalNumberOfTasksNeeded; counter++)
+        {
+            topPicking = TopPicking::construct();
+            batchHeader.addTask(topPicking);
+        }
+
+        batchHeader.save();
+    }
+
+    ttsCommit;
+
+    info('Done');
+}
